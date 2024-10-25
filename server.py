@@ -29,6 +29,20 @@ def directions(x, y, minX=0, minY=0, maxX=7, maxY=7):
 
     return validdirections
 
+# Função para pegar o IP da rede local (não o localhost)
+def obter_ip_rede_local():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(0)
+    try:
+        # Tenta se conectar a um endereço IP qualquer (não importa qual)
+        s.connect(('10.254.254.254', 1))
+        ip = s.getsockname()[0]  # Retorna o IP local
+    except Exception:
+        ip = '127.0.0.1'  # Se falhar, volta para localhost
+    finally:
+        s.close()
+    return ip
+
 #  Classes
 class Server:
     def __init__(self):
@@ -168,7 +182,7 @@ class Token:
 
 class OthelloServer:
     def __init__(self, host='localhost', port=5555):
-        self.host = host
+        self.host = obter_ip_rede_local()
         self.port = port
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((host, port))
@@ -269,6 +283,7 @@ class OthelloServer:
             conn.close()
 
     def start(self):
+        print(f'Server Running: {self.host}:{self.port}')
         client_id = 1  # Primeiro cliente será 1, o segundo será -1
         while client_id >= -1:
             conn, addr = self.server.accept()

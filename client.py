@@ -232,6 +232,10 @@ class Othello:
     
     def start(self):
         """Inicia a thread de recebimento de mensagens."""
+        host = input('IP:')
+        port = input('port:')
+        self.host = host
+        self.port = int(port)
         receive_thread = threading.Thread(target=self.receive_messages)
         receive_thread.daemon = True
         receive_thread.start()
