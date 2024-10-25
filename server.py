@@ -181,8 +181,8 @@ class Token:
         self.posY = 80 + (gridX * 80)
 
 class OthelloServer:
-    def __init__(self, host='localhost', port=5555):
-        self.host = obter_ip_rede_local()
+    def __init__(self, host='0.0.0.0', port=5555):
+        self.host = host
         self.port = port
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((host, port))
@@ -283,7 +283,7 @@ class OthelloServer:
             conn.close()
 
     def start(self):
-        print(f'Server Running: {self.host}:{self.port}')
+        print(f'Server Running: {obter_ip_rede_local()}:{self.port}')
         client_id = 1  # Primeiro cliente será 1, o segundo será -1
         while client_id >= -1:
             conn, addr = self.server.accept()
