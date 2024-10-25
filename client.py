@@ -67,6 +67,14 @@ class Othello:
 
         self.RUN = True
 
+        self.INPUT_TEXT = ''
+        self.FONT = pygame.font.SysFont("inter", 24)
+
+        self.chat_history = []
+
+        self.white = '2: white'
+        self.black = '2: black'
+
     def run(self):
         while self.RUN == True:
             self.input()
@@ -76,6 +84,19 @@ class Othello:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.RUN = False
+            
+            if event.type == pygame.TEXTINPUT:
+                if len(self.INPUT_TEXT) < 19:
+                    self.INPUT_TEXT += event.text
+            
+            #handle special keys
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_BACKSPACE:
+                    self.INPUT_TEXT = self.INPUT_TEXT[:-1]
+                if event.key == pygame.K_RETURN and self.INPUT_TEXT != '':
+                    self.send_message_chat(self.INPUT_TEXT)
+                    self.chat_history.append(["s", self.INPUT_TEXT])
+                    self.INPUT_TEXT = ''
 
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 3:
@@ -91,7 +112,6 @@ class Othello:
                         else:
                             if (y, x) in validCells:
                                 print(f'{x}{y}')
-                                self.grid.printGameLogicBoard()
                                 self.grid.insertToken(self.grid.gridLogic, self.turn, y, x)
                                 swappableTiles = self.grid.swappableTiles(y, x, self.grid.gridLogic, self.turn)
                                 for tile in swappableTiles:
@@ -115,10 +135,32 @@ class Othello:
         self.turn = turn
             
         # pygame.display.update()x  # Atualiza a exibição do pygame
+    
+    def draw_text(self, text, x, y, color=(250, 250, 250)):
+        img = self.FONT.render(text, True, color)
+        self.screen.blit(img, (x, y))
+    
+    def draw_chat(self):
+        y = 670
+        # Pegando as últimas 14 entradas do chat_history, de trás para frente
+        for type, content in reversed(self.chat_history[-14:]):
+            if type == 'r':
+                content = 'r: ' + content
+                self.draw_text(content, 805, y, (0, 248, 77))
+            else: self.draw_text(content, 805, y)
+            y -= 35
 
     def draw(self):
         self.screen.fill((0, 0, 0))
         self.grid.drawGrid(self.screen)
+        pygame.display.update()
+        pygame.draw.rect(self.screen, (50, 50, 50), [800, 200, 250, 500])
+        pygame.draw.rect(self.screen, (50, 50, 50), [800, 720, 250, 30])
+        self.draw_text(self.white, 800, 60)
+        self.draw_text(self.black, 800, 95)
+        self.draw_text('chat', 800, 175)
+        self.draw_chat()
+        self.draw_text(self.INPUT_TEXT, 805, 725)
         pygame.display.update()
 
     def connect(self):
@@ -152,6 +194,15 @@ class Othello:
         }
         json_message = json.dumps(message)
         self.socket.send(json_message.encode())  
+    
+    def send_message_chat(self, content):
+        message = {
+            "type": "chat",
+            "content": content,
+            "player": self.current_player * -1
+        }
+        json_message = json.dumps(message)
+        self.socket.send(json_message.encode())  
 
     def handle_message(self, message):
         # Processar a mensagem com base no tipo
@@ -162,14 +213,19 @@ class Othello:
             grid_logic = message.get('grid')
             turn = message.get('turn')
             self.update(grid_logic, turn)
-            print(f'turn: {self.turn}')
             self.grid.printGameLogicBoard()
             
 
         elif message_type == "setup":
             current_player = message.get('current_player')
             self.current_player = current_player
-            print(f'current_player: {self.current_player}')
+            if self.current_player == 1:
+                self.white += ' *you'
+            else: self.black += ' *you'
+
+        elif message_type == "chat":
+            content = message.get('content')
+            self.chat_history.append(['r', content])
 
         else:
             print("Tipo de mensagem desconhecido:", message)

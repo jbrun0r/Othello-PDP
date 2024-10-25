@@ -6,6 +6,7 @@ import json
 class MessageType(Enum):
     UPDATE = "update"
     MOVE = "move"
+    CHAT = "chat"
     GAME_OVER = "game_over"
     ERROR = "error"
     SETUP = "setup"
@@ -181,11 +182,9 @@ class OthelloServer:
 
     def handle_message(self, conn, message):
         # Processar a mensagem com base no tipo
-        print("Mensagem recebida:", message)
         message_type = message.get('type')
         
         if message_type == "move":
-            print(message_type)
             x = message.get('x')
             y = message.get('y')
             validCells = self.game.grid.findAvailMoves(self.game.grid.gridLogic, self.game.turn)
@@ -193,17 +192,21 @@ class OthelloServer:
                 pass
             else:
                 if (y, x) in validCells:
-                    print(f'{x}{y}')
-                    self.game.grid.printGameLogicBoard()
-                    print('passou')
                     self.game.grid.insertToken(self.game.grid.gridLogic, self.game.turn, y, x)
                     swappableTiles = self.game.grid.swappableTiles(y, x, self.game.grid.gridLogic, self.game.turn)
                     for tile in swappableTiles:
                         self.game.grid.gridLogic[tile[0]][tile[1]] *= -1
                     self.game.turn *= -1
-            self.send_update(conn, self.game.grid.gridLogic)
-            
-            self.game.grid.printGameLogicBoard()
+                    self.send_update(conn, self.game.grid.gridLogic, self.game.turn)
+        
+        if message_type == "chat":
+            content = message.get('content')
+            player = message.get('player')
+            message = {
+            "type": "chat",
+            "content": content, 
+            }
+            self.send_update_to(message, player)
 
         else:
             print("Tipo de mensagem desconhecido:", message)
@@ -217,27 +220,32 @@ class OthelloServer:
         json_message = json.dumps(message)
         conn.send(json_message.encode())  # Enviar o JSON codificado como bytes
 
-    def send_update(self, conn, grid_logic):
-        print("enviando update")
+    def send_update(self, conn, grid_logic, player):
         message = {
             "type": "update",  # Define o tipo de mensagem
             "grid": grid_logic,  # Envia o grid atual
             "turn": self.game.turn
         }
-        self.send_update_to_all_clients(message)
-        # json_message = json.dumps(message)
-        
-        # conn.sendall(json_message.encode())  # Enviar o JSON codificado como bytes
-        print("update enviado")
+        self.send_update_to(message, player)
     
     def send_update_to_all_clients(self, data):
         for client in self.players:
+            print(client)
             try:
                 json_message = json.dumps(data)
                 client.send(json_message.encode())
             except Exception as e:
                 print(f"Failed to send update to client: {e}")
                 self.clients.remove(client)  # Remover cliente em caso de falha
+
+    def send_update_to(self, data, player):
+        client = self.players[0 if player == 1 else 1]
+        try:
+            json_message = json.dumps(data)
+            client.send(json_message.encode())
+        except Exception as e:
+            print(f"Failed to send update to client: {e}")
+            self.clients.remove(client)  # Remover cliente em caso de falha
 
     def handle_client(self, conn, player):
         print(f"Jogador {player} conectado.")
