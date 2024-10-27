@@ -17,6 +17,14 @@ class LogicGrid:
         self.insert_token(grid, -1, 3, 4)
         self.insert_token(grid, 1, 4, 4)
         self.insert_token(grid, -1, 4, 3)
+
+        # for y in range(rows):
+        #     for x in range(columns):
+        #         self.insert_token(grid, 1, y, x)
+        # self.insert_token(grid, 1, 3, 3)
+        # self.insert_token(grid, -1, 3, 4)
+        # self.insert_token(grid, 0, 4, 4)
+        # self.insert_token(grid, -1, 4, 3)
         return grid
 
     def print_logic_board(self):
@@ -105,17 +113,32 @@ class LogicGrid:
 
         return swappable_tiles
 
+    def calculate_score(self):
+        """Calculates the score by counting occurrences of 1, -1, and 0 in the logic grid."""
+        count_white = 0
+        count_black = 0
+        count_empty = 0
 
+        for row in self.logic_grid:
+            count_white += row.count(1)
+            count_black += row.count(-1)
+            count_empty += row.count(0)
+
+        return (count_white, count_black, count_empty)
+
+    def reset_logic_grid(self):
+        self.tokens.clear()
+        self.logic_grid = self.generate_grid(self.num_rows, self.num_columns)
 class DrawableGrid():
     def __init__(self, rows, columns, size, main):
         self.game = main
         self.num_rows = rows
         self.num_columns = columns
         self.cell_size = size
-        self.white_token_image = load_image('app/assets/WhiteToken.png', size)
-        self.black_token_image = load_image('app/assets/BlackToken.png', size)
-        self.transition_white_to_black = [load_image(f'app/assets/BlackToWhite{i}.png', self.cell_size) for i in range(1, 4)]
-        self.transition_black_to_white = [load_image(f'app/assets/WhiteToBlack{i}.png', self.cell_size) for i in range(1, 4)]
+        self.white_token_image = load_image('app/assets/white_token.png', size)
+        self.black_token_image = load_image('app/assets/black_token.png', size)
+        self.transition_white_to_black = [load_image(f'app/assets/black_to_white{i}.png', self.cell_size) for i in range(1, 4)]
+        self.transition_black_to_white = [load_image(f'app/assets/white_to_black{i}.png', self.cell_size) for i in range(1, 4)]
         self.background_images = self.load_background_images()
 
         self.tokens = {}
@@ -127,10 +150,6 @@ class DrawableGrid():
     def generate_grid(self, rows, columns):
         """Generates an empty grid for logical operations."""
         grid = [[0 for _ in range(columns)] for _ in range(rows)]
-        self.insert_token(grid, 1, 3, 3)
-        self.insert_token(grid, -1, 3, 4)
-        self.insert_token(grid, 1, 4, 4)
-        self.insert_token(grid, -1, 4, 3)
         return grid
 
     def print_logic_board(self):
@@ -223,7 +242,7 @@ class DrawableGrid():
     def load_background_images(self):
         """Loads and returns background images for the grid."""
         alpha = 'ABCDEFGHI'
-        sprite_sheet = pygame.image.load('app/assets/image.png').convert_alpha()
+        sprite_sheet = pygame.image.load('app/assets/wood.png').convert_alpha()
         image_dict = {}
         for i in range(3):
             for j in range(7):
@@ -269,3 +288,16 @@ class DrawableGrid():
             self.tokens[(cell[0], cell[1])].animate_transition(self.transition_white_to_black, self.white_token_image)
         else:
             self.tokens[(cell[0], cell[1])].animate_transition(self.transition_black_to_white, self.black_token_image)
+    
+    def calculate_score(self):
+        """Calculates the score by counting occurrences of 1, -1, and 0 in the logic grid."""
+        count_white = 0
+        count_black = 0
+        count_empty = 0
+
+        for row in self.logic_grid:
+            count_white += row.count(1)
+            count_black += row.count(-1)
+            count_empty += row.count(0)
+
+        return (count_white, count_black, count_empty)

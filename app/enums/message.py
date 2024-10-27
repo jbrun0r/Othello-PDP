@@ -8,3 +8,5 @@ class MessageType(Enum):
     ERROR = "error"
     CHAT = "chat"
     SETUP = "setup"
+    GIVE_UP = "give_up"
+    RESTART = "restart"

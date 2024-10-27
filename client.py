@@ -18,18 +18,20 @@ class Client:
         self.clock = pygame.time.Clock()
 
         self.current_player = 1
-        self.turn = 1
+        self.turn = -1
 
         self.grid = DrawableGrid(8, 8, (80, 80), self)
-
+        self.game_over = False
         self.RUN = True
 
         self.INPUT_TEXT = ''
         self.FONT = pygame.font.SysFont('arial', 18)
         self.chat_history = []
 
-        self.white = '2: white'
-        self.black = '2: black'
+        self.white_score = 2
+        self.white_score_text = 'white'
+        self.black_score = 2
+        self.black_score_text = 'black'
 
     def connect(self):
         try:
@@ -76,23 +78,38 @@ class Client:
 
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:
-                    if self.turn == self.current_player:
-                        x, y = pygame.mouse.get_pos()
-                        x, y = (x - 80) // 80, (y - 80) // 80
-                        valid_cells = self.grid.find_available_moves(self.grid.logic_grid, self.turn)
-                        if not valid_cells:
-                            pass
-                        else:
-                            if (y, x) in valid_cells:
-                                self.grid.insert_token(self.grid.logic_grid, self.turn, y, x)
-                                swappable_tiles = self.grid.get_swappable_tiles(y, x, self.grid.logic_grid, self.turn)
-                                for tile in swappable_tiles:
-                                    self.grid.animate_transitions(tile, self.turn)
-                                    self.grid.logic_grid[tile[0]][tile[1]] *= -1
-                                
-                                self.send_move(x, y)
-                                self.turn *= -1
-                # if event.button == with:
+                    x, y = pygame.mouse.get_pos()
+
+                    if self.game_over:
+                        # if tap restart button
+                        if 800 <= x <= (800+250) and 130 <= y <= (130+30):
+                            self.send_restart()
+                    else:
+                        # if give up
+                        if 800 <= x <= (800+250) and 130 <= y <= (130+30):
+                            self.send_give_up()
+                            self.game_over = True
+                            if self.current_player == 1:
+                                self.black_score_text += ' WON!'
+                                self.white_score_text += ' GAVE UP'
+                            else:
+                                self.white_score_text += ' WON!'
+                                self.black_score_text += ' GAVE UP'
+                        elif self.turn == self.current_player:
+                            x, y = (x - 80) // 80, (y - 80) // 80
+                            if valid_cells := self.grid.find_available_moves(self.grid.logic_grid, self.turn):
+                                if (y, x) in valid_cells:
+                                    self.grid.insert_token(self.grid.logic_grid, self.turn, y, x)
+                                    swappable_tiles = self.grid.get_swappable_tiles(y, x, self.grid.logic_grid, self.turn)
+                                    for tile in swappable_tiles:
+                                        self.grid.animate_transitions(tile, self.turn)
+                                        self.grid.logic_grid[tile[0]][tile[1]] *= -1
+                                    
+                                    self.send_move(x, y)
+                                    self.turn *= -1
+                                    self.process_score()
+                
+                # if event.button == n:
                 #     self.grid.print_logic_board()
 
     def update(self, logic_grid, turn):
@@ -107,22 +124,40 @@ class Client:
                     self.grid.insert_token(self.grid.logic_grid, player, y, x)
                     
         self.turn = turn
+        self.process_score()
+        
+    def process_score(self):
+        self.white_score, self.black_score, count_zeros = self.grid.calculate_score()
             
-        # pygame.display.update()x  # Atualiza a exibição do pygame
-    
     def draw_text(self, text, x, y, color=(250, 250, 250)):
         text_as_image = self.FONT.render(text, True, color)
         self.screen.blit(text_as_image, (x, y))
     
     def draw_chat(self):
+        # Draw the chat box
+        pygame.draw.rect(self.screen, (20, 20, 20), [800, 200, 250, 500])
+        pygame.draw.rect(self.screen, (20, 20, 20), [800, 720, 250, 30])
+        # Draw static text
+        self.draw_text('chat', 800, 175)
         y = 670
         # Pegando as últimas 14 entradas do chat_history, de trás para frente
         for type, content in reversed(self.chat_history[-14:]):
             if type == 'r':
-                content = 'r: ' + content
-                self.draw_text(content, 805, y, (0, 248, 77))
-            else: self.draw_text(content, 805, y)
+                self.draw_text(content, 805, y)
+            else: self.draw_text(content, 805, y, (30, 120, 30))
             y -= 35 # espaco entre cada msg
+        # Draw input text
+        self.draw_text(self.INPUT_TEXT, 805, 725)
+
+    def draw_game_over(self):
+        if self.game_over:
+            pygame.draw.rect(self.screen, (30, 120, 30), (800, 130, 250, 30))
+            self.draw_text('RESTART', 885, 134, (0, 0, 0))
+
+    def draw_give_up(self):
+        if not self.game_over:
+            pygame.draw.rect(self.screen, (139, 0, 0), (800, 130, 250, 30))
+            self.draw_text('GIVE UP', 885, 134)
 
     def draw(self):
         self.screen.fill((0, 0, 0))  # Clear screen
@@ -130,22 +165,18 @@ class Client:
         # Draw the grid
         self.grid.draw_grid(self.screen)
 
-        # Draw the chat box
-        pygame.draw.rect(self.screen, (50, 50, 50), [800, 200, 250, 500])
-        pygame.draw.rect(self.screen, (50, 50, 50), [800, 720, 250, 30])
-        
-        # Draw static text
-        self.draw_text('chat', 800, 175)
-
-        # Draw placar
-        self.draw_text(self.white, 800, 60)
-        self.draw_text(self.black, 800, 95)
+        # Draw score
+        self.draw_text(f'{self.white_score}: {self.white_score_text}', 800, 60)
+        self.draw_text(f'{self.black_score}: {self.black_score_text}', 800, 95)
 
         # Draw chat history
         self.draw_chat()
 
-        # Draw input text
-        self.draw_text(self.INPUT_TEXT, 805, 725)
+        # if game over, draw
+        self.draw_game_over()
+
+        # if not game over draw give up button
+        self.draw_give_up()
 
         # Update the display
         pygame.display.flip()
@@ -182,13 +213,41 @@ class Client:
         json_message = json.dumps(message)
         self.socket.send(json_message.encode())
 
+    def send_give_up(self):
+        self.game_over = True
+        message = {
+            "type": MessageType.GIVE_UP.value,
+        }
+        json_message = json.dumps(message)
+        self.socket.send(json_message.encode())
+
+    def send_restart(self):
+        message = {
+            "type": MessageType.RESTART.value,
+        }
+        json_message = json.dumps(message)
+        self.socket.send(json_message.encode())
+
     def process_setup(self, message):
         current_player = message.get('current_player')
+
         self.current_player = current_player
+        self.turn = -1
+        self.white_score = 2
+        self.white_score_text = 'white'
+        self.black_score = 2
+        self.black_score_text = 'black'
+
+        self.process_score()
+        
         if self.current_player == 1:
-            self.white += ' *you'
-        else: self.black += ' *you'
-        self.process_update(message)
+            self.white_score_text += ' # YOU'
+        else: self.black_score_text += ' # YOU'
+
+        self.grid.tokens.clear()
+        grid_logic = message.get('grid')
+        self.update(grid_logic, -1)
+        self.game_over = False
 
     def process_update(self, message):
         grid_logic = message.get('grid')
@@ -199,6 +258,30 @@ class Client:
         content = message.get('content')
         self.chat_history.append(['r', content])
 
+    def process_gamer_over(self):
+        self.game_over = True
+        if self.white_score > self.black_score:
+                self.white_score_text += ' WON!'
+                self.black_score_text += ' LOST!'
+        
+        elif self.white_score < self.black_score:
+            self.black_score_text += ' WON!'
+            self.white_score_text += ' LOST!'
+        
+        else:
+            self.black_score_text += ' DRAW'
+            self.white_score_text += ' DRAW'
+
+    def process_give_up(self):
+        self.game_over = True
+
+        if self.current_player == -1:
+            self.black_score_text += ' WON!'
+            self.white_score_text += ' GAVE UP'
+        else:
+            self.white_score_text += ' WON!'
+            self.black_score_text += ' GAVE UP'
+        
     def handle_message(self, message):
 
         message_type = message.get('type')
@@ -212,6 +295,12 @@ class Client:
 
         elif message_type == MessageType.CHAT.value:
             self.process_chat(message)
+        
+        elif message_type == MessageType.GAME_OVER.value:
+            self.process_gamer_over()
+
+        elif message_type == MessageType.GIVE_UP.value:
+            self.process_give_up()
 
         else:
             print("Unknown message type", message)
