@@ -40,7 +40,7 @@ class Server:
             "type": MessageType.SETUP.value,
             "current_player": client, 
             "grid": self.grid.logic_grid, 
-            "turn": self.turn}
+            "turn": -1}
         self.send_message_to(message, client)
 
     def send_game_over(self,):
@@ -91,7 +91,7 @@ class Server:
 
     def process_restart(self):
         self.grid.reset_logic_grid()
-        self.turn -1
+        self.turn = -1
         self.game_over = False
         self.send_setup(1)
         self.send_setup(-1)
@@ -114,37 +114,86 @@ class Server:
         else:
             print("Unknown message type", message)
 
-    def handle_client(self, conn, client):
+    # def handle_client(self, conn, client):
 
+    #     self.send_setup(client)
+        
+    #     try:
+    #         while True:
+    #             data = conn.recv(1024).decode()
+    #             if data:
+    #                 try:
+    #                     message = json.loads(data)
+    #                     self.handle_message(conn, message, client)
+    #                 except json.JSONDecodeError:
+    #                     print("Error decoding the JSON message.")
+    #     except ConnectionResetError:
+    #         token = 'White' if client == 1 else 'Black'
+    #         print(f"{token} token client disconnected.")
+    #     finally:
+    #         conn.close()
+
+    # def run(self):
+    #     print('Othello-Server')
+    #     print(f"Server Running: ('{get_local_LAN_ip()}', {self.port})")
+        
+    #     self.conn_white, addr_white = self.server.accept()
+    #     print(f"White token client connected: {addr_white}")
+    #     thread_white = threading.Thread(target=self.handle_client, args=(self.conn_white, 1))
+    #     thread_white.start()
+
+    #     self.conn_black, addr_black = self.server.accept()
+    #     print(f"Black token client connected: {addr_black}")
+    #     thread_black = threading.Thread(target=self.handle_client, args=(self.conn_black, -1))
+    #     thread_black.start()
+    def handle_client(self, conn, client):
         self.send_setup(client)
         
         try:
             while True:
                 data = conn.recv(1024).decode()
                 if data:
+                    print(f'{client}: {data}')
                     try:
                         message = json.loads(data)
                         self.handle_message(conn, message, client)
                     except json.JSONDecodeError:
                         print("Error decoding the JSON message.")
-        except ConnectionResetError:
-            token = 'White' if client == 1 else 'Black'
-            print(f"{token} token client disconnected.")
+        except (ConnectionResetError, BrokenPipeError):
+            print(f"Client {client} disconnected.")
+            self.remove_client(client)
         finally:
             conn.close()
 
+    def remove_client(self, client):
+        """Remove the specified client and set up the server to accept a new client in that position."""
+        if client == 1:
+            self.conn_white = None
+        else:
+            self.conn_black = None
+        print(f"Client {client} removed. Waiting for new connection.")
+
+        # Start a new thread to accept a new client to fill the spot
+        threading.Thread(target=self.accept_new_client, args=(client,)).start()
+
+    def accept_new_client(self, client_color):
+        """Accepts a new client and assigns it to the specified color position."""
+        conn, addr = self.server.accept()
+        print(f"New client connected: {addr} as {'white' if client_color == 1 else 'black'}")
+        if client_color == 1:
+            self.conn_white = conn
+        else:
+            self.conn_black = conn
+
+        threading.Thread(target=self.handle_client, args=(conn, client_color)).start()
+
     def run(self):
+        print('Othello-Server')
         print(f"Server Running: ('{get_local_LAN_ip()}', {self.port})")
         
-        self.conn_white, addr_white = self.server.accept()
-        print(f"White token client connected: {addr_white}")
-        thread_white = threading.Thread(target=self.handle_client, args=(self.conn_white, 1))
-        thread_white.start()
-
-        self.conn_black, addr_black = self.server.accept()
-        print(f"Black token client connected: {addr_black}")
-        thread_black = threading.Thread(target=self.handle_client, args=(self.conn_black, -1))
-        thread_black.start()
+        # Initial client connections for white and black
+        self.accept_new_client(1)
+        self.accept_new_client(-1)
 
 # Iniciar o servidor
 if __name__ == "__main__":

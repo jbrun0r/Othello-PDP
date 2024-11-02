@@ -52,7 +52,7 @@ class Client:
     def run_GUI(self):
         client_host, client_port = self.socket.getsockname()
         server_host, server_port = self.socket.getpeername()
-        pygame.display.set_caption(f"Othello-client {client_host}:{client_port} connected to server {server_host}:{server_port}")
+        pygame.display.set_caption(f"Othello-Client {client_host}:{client_port} connected to server {server_host}:{server_port}")
         while self.RUN == True:
             self.input()
             self.draw()
@@ -61,6 +61,7 @@ class Client:
     def input(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
+                self.send_give_up()
                 self.RUN = False
             
             if event.type == pygame.TEXTINPUT:
@@ -185,6 +186,8 @@ class Client:
         try:
             while True:
                 if _message := self.socket.recv(4096).decode():
+                    print()
+                    print(_message)
                     try:
                         message = json.loads(_message)
                         self.handle_message(message)
@@ -230,6 +233,8 @@ class Client:
 
     def process_setup(self, message):
         current_player = message.get('current_player')
+
+        self.game_over = False
 
         self.current_player = current_player
         self.turn = -1
@@ -289,7 +294,6 @@ class Client:
         if message_type == MessageType.UPDATE.value:
             self.process_update(message)
             
-
         elif message_type == MessageType.SETUP.value:
             self.process_setup(message)
 
