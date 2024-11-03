@@ -3,7 +3,7 @@ import threading
 import json
 
 from app.utils.socket import get_local_LAN_ip
-from app.enums.message import MessageType
+from app.enums.message import MessageType, PlayerStatusType
 
 from app._class.Grid import LogicGrid
 
@@ -36,14 +36,22 @@ class Server:
                 print(f"Failed to send update to client {client}: {e}")
 
     def send_setup(self, client):
+        rival_status = PlayerStatusType.CONNECTED.value
+        if not self.conn_white or not self.conn_black:
+            rival_status = PlayerStatusType.DISCONNECTED.value
         message = {
             "type": MessageType.SETUP.value,
             "current_player": client, 
             "grid": self.grid.logic_grid, 
-            "turn": -1}
+            "turn": -1,
+            "rival_status": rival_status
+        }
         self.send_message_to(message, client)
 
-    def send_game_over(self,):
+        if self.conn_white and self.conn_black:
+            self.send_rival_connected(client)
+
+    def send_game_over(self):
         message = {
             "type": MessageType.GAME_OVER.value,
         }
@@ -57,6 +65,13 @@ class Server:
             "turn": self.turn
         }
         self.send_message_to(message, self.turn)
+    
+    def send_rival_connected(self, client):
+        message = {
+            "type": MessageType.RIVAL_CONNECTED.value,
+            "grid": self.grid.logic_grid,
+        }
+        self.send_message_to(message, client*-1)
 
     def process_move(self, message):
         x = message.get('x')
@@ -83,11 +98,18 @@ class Server:
         }
         self.send_message_to(message, client)
 
-    def process_give_up(self, client):
+    def process_give_up(self, conn, client, message):
+        rival_status = message.get('rival_status')
         message = {
-            "type": MessageType.GIVE_UP.value
+            "type": MessageType.GIVE_UP.value,
+            "rival_status": rival_status
         }
         self.send_message_to(message, client*-1)
+        if rival_status == PlayerStatusType.DISCONNECTED.value:
+            self.grid.reset_logic_grid()
+            self.turn = -1
+            self.game_over = False
+            conn.close()
 
     def process_restart(self):
         self.grid.reset_logic_grid()
@@ -95,7 +117,7 @@ class Server:
         self.game_over = False
         self.send_setup(1)
         self.send_setup(-1)
-
+    
     def handle_message(self, conn, message, client):
         message_type = message.get('type')
         
@@ -106,46 +128,14 @@ class Server:
             self.process_chat(message)
 
         elif message_type == MessageType.GIVE_UP.value:
-            self.process_give_up(client)
+            self.process_give_up(conn, client, message)
 
         elif message_type == MessageType.RESTART.value:
             self.process_restart()
 
         else:
             print("Unknown message type", message)
-
-    # def handle_client(self, conn, client):
-
-    #     self.send_setup(client)
-        
-    #     try:
-    #         while True:
-    #             data = conn.recv(1024).decode()
-    #             if data:
-    #                 try:
-    #                     message = json.loads(data)
-    #                     self.handle_message(conn, message, client)
-    #                 except json.JSONDecodeError:
-    #                     print("Error decoding the JSON message.")
-    #     except ConnectionResetError:
-    #         token = 'White' if client == 1 else 'Black'
-    #         print(f"{token} token client disconnected.")
-    #     finally:
-    #         conn.close()
-
-    # def run(self):
-    #     print('Othello-Server')
-    #     print(f"Server Running: ('{get_local_LAN_ip()}', {self.port})")
-        
-    #     self.conn_white, addr_white = self.server.accept()
-    #     print(f"White token client connected: {addr_white}")
-    #     thread_white = threading.Thread(target=self.handle_client, args=(self.conn_white, 1))
-    #     thread_white.start()
-
-    #     self.conn_black, addr_black = self.server.accept()
-    #     print(f"Black token client connected: {addr_black}")
-    #     thread_black = threading.Thread(target=self.handle_client, args=(self.conn_black, -1))
-    #     thread_black.start()
+            
     def handle_client(self, conn, client):
         self.send_setup(client)
         
@@ -159,7 +149,7 @@ class Server:
                         self.handle_message(conn, message, client)
                     except json.JSONDecodeError:
                         print("Error decoding the JSON message.")
-        except (ConnectionResetError, BrokenPipeError):
+        except (ConnectionResetError, BrokenPipeError, OSError):
             print(f"Client {client} disconnected.")
             self.remove_client(client)
         finally:
@@ -188,8 +178,7 @@ class Server:
         threading.Thread(target=self.handle_client, args=(conn, client_color)).start()
 
     def run(self):
-        print('Othello-Server')
-        print(f"Server Running: ('{get_local_LAN_ip()}', {self.port})")
+        print(f"Othello-Server Running: ('{get_local_LAN_ip()}', {self.port})")
         
         # Initial client connections for white and black
         self.accept_new_client(1)

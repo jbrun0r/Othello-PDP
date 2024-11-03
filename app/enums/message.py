@@ -10,3 +10,9 @@ class MessageType(Enum):
     SETUP = "setup"
     GIVE_UP = "give_up"
     RESTART = "restart"
+    RIVAL_CONNECTED = "rival_connected"
+
+class PlayerStatusType(Enum):
+    GAVE_UP = "GAVE UP"
+    DISCONNECTED = "DISCONNECTED"
+    CONNECTED = "CONNECTED"

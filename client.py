@@ -3,7 +3,7 @@ import json
 import pygame
 import threading
 
-from app.enums.message import MessageType
+from app.enums.message import MessageType, PlayerStatusType
 from app._class.Grid import DrawableGrid
 
 
@@ -33,6 +33,8 @@ class Client:
         self.black_score = 2
         self.black_score_text = 'black'
 
+        self.rival_status = PlayerStatusType.DISCONNECTED.value
+
     def connect(self):
         try:
             self.socket.connect((self.host, self.port))
@@ -53,15 +55,18 @@ class Client:
         client_host, client_port = self.socket.getsockname()
         server_host, server_port = self.socket.getpeername()
         pygame.display.set_caption(f"Othello-Client {client_host}:{client_port} connected to server {server_host}:{server_port}")
-        while self.RUN == True:
+
+        while self.RUN:
             self.input()
             self.draw()
             self.clock.tick(60)
+        # self.socket.shutdown(socket.SHUT_RDWR)
+        self.socket.close()
 
     def input(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                self.send_give_up()
+                self.send_give_up(PlayerStatusType.DISCONNECTED.value)
                 self.RUN = False
             
             if event.type == pygame.TEXTINPUT:
@@ -88,14 +93,14 @@ class Client:
                     else:
                         # if give up
                         if 800 <= x <= (800+250) and 130 <= y <= (130+30):
-                            self.send_give_up()
+                            self.send_give_up(PlayerStatusType.GAVE_UP.value)
                             self.game_over = True
                             if self.current_player == 1:
                                 self.black_score_text += ' WON!'
-                                self.white_score_text += ' GAVE UP'
+                                self.white_score_text += ' ' + PlayerStatusType.GAVE_UP.value
                             else:
                                 self.white_score_text += ' WON!'
-                                self.black_score_text += ' GAVE UP'
+                                self.black_score_text += ' ' + PlayerStatusType.GAVE_UP.value
                         elif self.turn == self.current_player:
                             x, y = (x - 80) // 80, (y - 80) // 80
                             if valid_cells := self.grid.find_available_moves(self.grid.logic_grid, self.turn):
@@ -145,6 +150,8 @@ class Client:
         for type, content in reversed(self.chat_history[-14:]):
             if type == 'r':
                 self.draw_text(content, 805, y)
+            # elif type == 'i':
+            #     self.draw_text(content, 805, y, (180, 180, 0))
             else: self.draw_text(content, 805, y, (30, 120, 30))
             y -= 35 # espaco entre cada msg
         # Draw input text
@@ -170,21 +177,22 @@ class Client:
         self.draw_text(f'{self.white_score}: {self.white_score_text}', 800, 60)
         self.draw_text(f'{self.black_score}: {self.black_score_text}', 800, 95)
 
-        # Draw chat history
-        self.draw_chat()
+        if self.rival_status == PlayerStatusType.CONNECTED.value:
+            # Draw chat history
+            self.draw_chat()
 
-        # if game over, draw
-        self.draw_game_over()
+            # if game over, draw
+            self.draw_game_over()
 
-        # if not game over draw give up button
-        self.draw_give_up()
+            # if not game over draw give up button
+            self.draw_give_up()
 
         # Update the display
         pygame.display.flip()
 
     def receive_messages(self):
         try:
-            while True:
+            while self.RUN:
                 if _message := self.socket.recv(4096).decode():
                     print()
                     print(_message)
@@ -216,10 +224,11 @@ class Client:
         json_message = json.dumps(message)
         self.socket.send(json_message.encode())
 
-    def send_give_up(self):
+    def send_give_up(self, rival_status):
         self.game_over = True
         message = {
             "type": MessageType.GIVE_UP.value,
+            "rival_status": rival_status
         }
         json_message = json.dumps(message)
         self.socket.send(json_message.encode())
@@ -233,21 +242,27 @@ class Client:
 
     def process_setup(self, message):
         current_player = message.get('current_player')
+        rival_status = message.get('rival_status')
 
         self.game_over = False
 
         self.current_player = current_player
+        self.rival_status = rival_status
         self.turn = -1
         self.white_score = 2
-        self.white_score_text = 'white'
         self.black_score = 2
-        self.black_score_text = 'black'
 
         self.process_score()
+
+        if self.rival_status == PlayerStatusType.CONNECTED.value:
+            rival_status = ''
         
         if self.current_player == 1:
-            self.white_score_text += ' # YOU'
-        else: self.black_score_text += ' # YOU'
+            self.white_score_text = 'white # YOU'
+            self.black_score_text = 'black ' + rival_status
+        else: 
+            self.black_score_text = 'black # YOU'
+            self.white_score_text = 'white ' + rival_status
 
         self.grid.tokens.clear()
         grid_logic = message.get('grid')
@@ -277,15 +292,39 @@ class Client:
             self.black_score_text += ' DRAW'
             self.white_score_text += ' DRAW'
 
-    def process_give_up(self):
+    def process_give_up(self, message):
         self.game_over = True
+        rival_status = message.get('rival_status')
+
+        # self.chat_history.append(['i', f'[INFO] rival {rival_status}'])
+        if rival_status == PlayerStatusType.DISCONNECTED.value:
+            self.rival_status = rival_status
 
         if self.current_player == -1:
             self.black_score_text += ' WON!'
-            self.white_score_text += ' GAVE UP'
+            self.white_score_text += ' ' + rival_status
         else:
             self.white_score_text += ' WON!'
-            self.black_score_text += ' GAVE UP'
+            self.black_score_text += ' ' + rival_status
+
+    def process_rival_connected(self, message):
+        self.turn = -1
+        self.white_score = 2
+        self.black_score = 2
+
+        if self.current_player == 1:
+            self.white_score_text = 'white # YOU'
+            self.black_score_text = 'black '
+        else: 
+            self.black_score_text = 'black # YOU'
+            self.white_score_text = 'white '
+        
+        self.grid.tokens.clear()
+        grid_logic = message.get('grid')
+        self.update(grid_logic, -1)
+        self.game_over = False
+        self.rival_status = PlayerStatusType.CONNECTED.value
+        # self.chat_history.append(['i', f'[INFO] rival CONNECTED'])
         
     def handle_message(self, message):
 
@@ -304,7 +343,10 @@ class Client:
             self.process_gamer_over()
 
         elif message_type == MessageType.GIVE_UP.value:
-            self.process_give_up()
+            self.process_give_up(message)
+
+        elif message_type == MessageType.RIVAL_CONNECTED.value:
+            self.process_rival_connected(message)
 
         else:
             print("Unknown message type", message)
