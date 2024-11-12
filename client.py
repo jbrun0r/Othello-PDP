@@ -1,373 +1,363 @@
 import socket
 import json
-from enum import Enum
 import pygame
 import threading
 
-
-class MessageType(Enum):
-    UPDATE = "update"
-    MOVE = "move"
-    GAME_OVER = "game_over"
-    ERROR = "error"
+from app.enums.message import MessageType, PlayerStatusType
+from app._class.Grid import DrawableGrid
 
 
-#  utility functions
-def directions(x, y, minX=0, minY=0, maxX=7, maxY=7):
-    """Check to determine which directions are valid from current cell"""
-    validdirections = []
-    if x != minX: validdirections.append((x-1, y))
-    if x != minX and y != minY: validdirections.append((x-1, y-1))
-    if x != minX and y != maxY: validdirections.append((x-1, y+1))
-
-    if x!= maxX: validdirections.append((x+1, y))
-    if x != maxX and y != minY: validdirections.append((x+1, y-1))
-    if x != maxX and y != maxY: validdirections.append((x+1, y+1))
-
-    if y != minY: validdirections.append((x, y-1))
-    if y != maxY: validdirections.append((x, y+1))
-
-    return validdirections
-
-def loadImages(path, size):
-    """Load an image into the game, and scale the image"""
-    img = pygame.image.load(f"{path}").convert_alpha()
-    img = pygame.transform.scale(img, size)
-    return img
-
-def loadSpriteSheet(sheet, row, col, newSize, size):
-    """creates an empty surface, loads a portion of the spritesheet onto the surface, then return that surface as img"""
-    image = pygame.Surface((32, 32)).convert_alpha()
-    image.blit(sheet, (0, 0), (row * size[0], col * size[1], size[0], size[1]))
-    image = pygame.transform.scale(image, newSize)
-    image.set_colorkey('Black')
-    return image
-
-#  Classes
-class Othello:
-    def __init__(self, host='localhost', port=5555):
+class Client:
+    def __init__(self, host='0.0.0.0', port=5555):
         self.host = host
         self.port = port
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.connect()
 
         pygame.init()
-        self.screen = pygame.display.set_mode((1100, 800))
-        pygame.display.set_caption('Othello-PPD-Socket')
+        self.screen = pygame.display.set_mode((1100, 800), pygame.DOUBLEBUF)
+        self.clock = pygame.time.Clock()
 
         self.current_player = 1
-        self.turn = 1
+        self.turn = -1
 
-        self.time = 0
-
-        self.rows = 8
-        self.columns = 8
-
-        self.grid = Grid(self.rows, self.columns, (80, 80), self)
-
+        self.grid = DrawableGrid(8, 8, (80, 80), self)
+        self.game_over = False
         self.RUN = True
 
-    def run(self):
-        while self.RUN == True:
-            self.input()
-            self.draw()
+        self.INPUT_TEXT = ''
+        self.FONT = pygame.font.SysFont('arial', 18)
+        self.chat_history = []
 
-    def input(self):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.RUN = False
+        self.white_score = 2
+        self.white_score_text = 'white'
+        self.black_score = 2
+        self.black_score_text = 'black'
 
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 3:
-                    self.grid.printGameLogicBoard()
-
-                if event.button == 1:
-                    if self.turn == self.current_player:
-                        x, y = pygame.mouse.get_pos()
-                        x, y = (x - 80) // 80, (y - 80) // 80
-                        validCells = self.grid.findAvailMoves(self.grid.gridLogic, self.turn)
-                        if not validCells:
-                            pass
-                        else:
-                            if (y, x) in validCells:
-                                print(f'{x}{y}')
-                                self.grid.printGameLogicBoard()
-                                self.grid.insertToken(self.grid.gridLogic, self.turn, y, x)
-                                swappableTiles = self.grid.swappableTiles(y, x, self.grid.gridLogic, self.turn)
-                                for tile in swappableTiles:
-                                    self.grid.animateTransitions(tile, self.turn)
-                                    self.grid.gridLogic[tile[0]][tile[1]] *= -1
-                                
-                                self.send_move(x, y)
-                                self.turn *= -1
-
-    def update(self, gridLogic, turn):
-        self.grid.gridLogic = gridLogic  # Atualiza o grid com a nova lógica
-
-        # Percorre o gridLogic
-        for y in range(len(gridLogic)):        # Percorre as linhas
-            for x in range(len(gridLogic[y])):  # Percorre as colunas
-                if gridLogic[y][x] != 0:  # Verifica se o valor na posição (y, x) não é 0
-                    player = gridLogic[y][x]  # Define o jogador (-1 ou 1)
-                    # Chama a função insertToken com o jogador e as coordenadas
-                    self.grid.insertToken(self.grid.gridLogic, player, y, x)
-                    
-        self.turn = turn
-            
-        # pygame.display.update()x  # Atualiza a exibição do pygame
-
-    def draw(self):
-        self.screen.fill((0, 0, 0))
-        self.grid.drawGrid(self.screen)
-        pygame.display.update()
+        self.rival_status = PlayerStatusType.DISCONNECTED.value
 
     def connect(self):
         try:
             self.socket.connect((self.host, self.port))
-            print("Conectado ao servidor.")
+            print("Connected.")
         except ConnectionRefusedError:
-            print("Falha ao conectar ao servidor.")
+            print("Failed to connect to the server.")
             return
+
+    def run(self):
+        """Inicia a thread de recebimento de mensagens."""
+        self.get_server_address()
+        self.connect()
+        receive_thread = threading.Thread(target=self.receive_messages)
+        receive_thread.daemon = True
+        receive_thread.start()
+
+    def run_GUI(self):
+        client_host, client_port = self.socket.getsockname()
+        server_host, server_port = self.socket.getpeername()
+        pygame.display.set_caption(f"Othello-Client {client_host}:{client_port} connected to server {server_host}:{server_port}")
+
+        while self.RUN:
+            self.input()
+            self.draw()
+            self.clock.tick(60)
+        # self.socket.shutdown(socket.SHUT_RDWR)
+        self.socket.close()
+
+    def input(self):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.send_give_up(PlayerStatusType.DISCONNECTED.value)
+                self.RUN = False
+            
+            if event.type == pygame.TEXTINPUT:
+                if len(self.INPUT_TEXT) < 19:
+                    self.INPUT_TEXT += event.text
+            
+            #handle special keys
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_BACKSPACE:
+                    self.INPUT_TEXT = self.INPUT_TEXT[:-1]
+                if event.key == pygame.K_RETURN and self.INPUT_TEXT != '':
+                    self.send_message_chat(self.INPUT_TEXT)
+                    self.chat_history.append(["s", self.INPUT_TEXT])
+                    self.INPUT_TEXT = ''
+
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    x, y = pygame.mouse.get_pos()
+
+                    if self.game_over:
+                        # if tap restart button
+                        if 800 <= x <= (800+250) and 130 <= y <= (130+30):
+                            self.send_restart()
+                    else:
+                        # if give up
+                        if 800 <= x <= (800+250) and 130 <= y <= (130+30):
+                            self.send_give_up(PlayerStatusType.GAVE_UP.value)
+                            self.game_over = True
+                            if self.current_player == 1:
+                                self.black_score_text += ' WON!'
+                                self.white_score_text += ' ' + PlayerStatusType.GAVE_UP.value
+                            else:
+                                self.white_score_text += ' WON!'
+                                self.black_score_text += ' ' + PlayerStatusType.GAVE_UP.value
+                        elif self.turn == self.current_player:
+                            x, y = (x - 80) // 80, (y - 80) // 80
+                            if valid_cells := self.grid.find_available_moves(self.grid.logic_grid, self.turn):
+                                if (y, x) in valid_cells:
+                                    self.grid.insert_token(self.grid.logic_grid, self.turn, y, x)
+                                    swappable_tiles = self.grid.get_swappable_tiles(y, x, self.grid.logic_grid, self.turn)
+                                    for tile in swappable_tiles:
+                                        self.grid.animate_transitions(tile, self.turn)
+                                        self.grid.logic_grid[tile[0]][tile[1]] *= -1
+                                    
+                                    self.send_move(x, y)
+                                    self.turn *= -1
+                                    self.process_score()
+                
+                # if event.button == n:
+                #     self.grid.print_logic_board()
+
+    def update(self, logic_grid, turn):
+        self.grid.logic_grid = logic_grid  # Atualiza o grid com a nova lógica
+
+        # Percorre o logic_grid
+        for y in range(len(logic_grid)):        # Percorre as linhas
+            for x in range(len(logic_grid[y])):  # Percorre as colunas
+                if logic_grid[y][x] != 0:  # Verifica se o valor na posição (y, x) não é 0
+                    player = logic_grid[y][x]  # Define o jogador (-1 ou 1)
+                    # Chama a função insertToken com o jogador e as coordenadas
+                    self.grid.insert_token(self.grid.logic_grid, player, y, x)
+                    
+        self.turn = turn
+        self.process_score()
+        
+    def process_score(self):
+        self.white_score, self.black_score, count_zeros = self.grid.calculate_score()
+            
+    def draw_text(self, text, x, y, color=(250, 250, 250)):
+        text_as_image = self.FONT.render(text, True, color)
+        self.screen.blit(text_as_image, (x, y))
+    
+    def draw_chat(self):
+        # Draw the chat box
+        pygame.draw.rect(self.screen, (20, 20, 20), [800, 200, 250, 500])
+        pygame.draw.rect(self.screen, (20, 20, 20), [800, 720, 250, 30])
+        # Draw static text
+        self.draw_text('chat', 800, 175)
+        y = 670
+        # Pegando as últimas 14 entradas do chat_history, de trás para frente
+        for type, content in reversed(self.chat_history[-14:]):
+            if type == 'r':
+                self.draw_text(content, 805, y)
+            # elif type == 'i':
+            #     self.draw_text(content, 805, y, (180, 180, 0))
+            else: self.draw_text(content, 805, y, (30, 120, 30))
+            y -= 35 # espaco entre cada msg
+        # Draw input text
+        self.draw_text(self.INPUT_TEXT, 805, 725)
+
+    def draw_game_over(self):
+        if self.game_over:
+            pygame.draw.rect(self.screen, (30, 120, 30), (800, 130, 250, 30))
+            self.draw_text('RESTART', 885, 134, (0, 0, 0))
+
+    def draw_give_up(self):
+        if not self.game_over:
+            pygame.draw.rect(self.screen, (139, 0, 0), (800, 130, 250, 30))
+            self.draw_text('GIVE UP', 885, 134)
+
+    def draw(self):
+        self.screen.fill((0, 0, 0))  # Clear screen
+
+        # Draw the grid
+        self.grid.draw_grid(self.screen)
+
+        # Draw score
+        self.draw_text(f'{self.white_score}: {self.white_score_text}', 800, 60)
+        self.draw_text(f'{self.black_score}: {self.black_score_text}', 800, 95)
+
+        if self.rival_status == PlayerStatusType.CONNECTED.value:
+            # Draw chat history
+            self.draw_chat()
+
+            # if game over, draw
+            self.draw_game_over()
+
+            # if not game over draw give up button
+            self.draw_give_up()
+
+        # Update the display
+        pygame.display.flip()
 
     def receive_messages(self):
         try:
-            while True:
-                data = self.socket.recv(4096).decode()
-                if data:
+            while self.RUN:
+                if _message := self.socket.recv(4096).decode():
+                    print()
+                    print(_message)
                     try:
-                        message = json.loads(data)  # Converter de JSON para dicionário
+                        message = json.loads(_message)
                         self.handle_message(message)
                     except json.JSONDecodeError:
-                        print("Erro ao decodificar a mensagem JSON.")
+                        print("Error decoding the JSON message.")
         except ConnectionResetError:
-            print("Conexão perdida com o servidor.")
+            print("Connection lost with the server.")
         finally:
             self.socket.close()
     
     def send_move(self, x, y):
         message = {
-            "type": "move",
+            "type": MessageType.MOVE.value,
             "x": x,
             "y": y
         }
         json_message = json.dumps(message)
         self.socket.send(json_message.encode())  
+    
+    def send_message_chat(self, content):
+        message = {
+            "type": MessageType.CHAT.value,
+            "content": content,
+            "player": self.current_player * -1
+        }
+        json_message = json.dumps(message)
+        self.socket.send(json_message.encode())
 
+    def send_give_up(self, rival_status):
+        self.game_over = True
+        message = {
+            "type": MessageType.GIVE_UP.value,
+            "rival_status": rival_status
+        }
+        json_message = json.dumps(message)
+        self.socket.send(json_message.encode())
+
+    def send_restart(self):
+        message = {
+            "type": MessageType.RESTART.value,
+        }
+        json_message = json.dumps(message)
+        self.socket.send(json_message.encode())
+
+    def process_setup(self, message):
+        current_player = message.get('current_player')
+        rival_status = message.get('rival_status')
+
+        self.game_over = False
+
+        self.current_player = current_player
+        self.rival_status = rival_status
+        self.turn = -1
+        self.white_score = 2
+        self.black_score = 2
+
+        self.process_score()
+
+        if self.rival_status == PlayerStatusType.CONNECTED.value:
+            rival_status = ''
+        
+        if self.current_player == 1:
+            self.white_score_text = 'white # YOU'
+            self.black_score_text = 'black ' + rival_status
+        else: 
+            self.black_score_text = 'black # YOU'
+            self.white_score_text = 'white ' + rival_status
+
+        self.grid.tokens.clear()
+        grid_logic = message.get('grid')
+        self.update(grid_logic, -1)
+        self.game_over = False
+
+    def process_update(self, message):
+        grid_logic = message.get('grid')
+        turn = message.get('turn')
+        self.update(grid_logic, turn)
+
+    def process_chat(self, message):
+        content = message.get('content')
+        self.chat_history.append(['r', content])
+
+    def process_gamer_over(self):
+        self.game_over = True
+        if self.white_score > self.black_score:
+                self.white_score_text += ' WON!'
+                self.black_score_text += ' LOST!'
+        
+        elif self.white_score < self.black_score:
+            self.black_score_text += ' WON!'
+            self.white_score_text += ' LOST!'
+        
+        else:
+            self.black_score_text += ' DRAW'
+            self.white_score_text += ' DRAW'
+
+    def process_give_up(self, message):
+        self.game_over = True
+        rival_status = message.get('rival_status')
+
+        # self.chat_history.append(['i', f'[INFO] rival {rival_status}'])
+        if rival_status == PlayerStatusType.DISCONNECTED.value:
+            self.rival_status = rival_status
+
+        if self.current_player == -1:
+            self.black_score_text += ' WON!'
+            self.white_score_text += ' ' + rival_status
+        else:
+            self.white_score_text += ' WON!'
+            self.black_score_text += ' ' + rival_status
+
+    def process_rival_connected(self, message):
+        self.turn = -1
+        self.white_score = 2
+        self.black_score = 2
+
+        if self.current_player == 1:
+            self.white_score_text = 'white # YOU'
+            self.black_score_text = 'black '
+        else: 
+            self.black_score_text = 'black # YOU'
+            self.white_score_text = 'white '
+        
+        self.grid.tokens.clear()
+        grid_logic = message.get('grid')
+        self.update(grid_logic, -1)
+        self.game_over = False
+        self.rival_status = PlayerStatusType.CONNECTED.value
+        # self.chat_history.append(['i', f'[INFO] rival CONNECTED'])
+        
     def handle_message(self, message):
-        # Processar a mensagem com base no tipo
-        print("Mensagem recebida:", message)
+
         message_type = message.get('type')
         
-        if message_type == "update":
-            grid_logic = message.get('grid')
-            turn = message.get('turn')
-            self.update(grid_logic, turn)
-            print(f'turn: {self.turn}')
-            self.grid.printGameLogicBoard()
+        if message_type == MessageType.UPDATE.value:
+            self.process_update(message)
             
+        elif message_type == MessageType.SETUP.value:
+            self.process_setup(message)
 
-        elif message_type == "setup":
-            current_player = message.get('current_player')
-            self.current_player = current_player
-            print(f'current_player: {self.current_player}')
+        elif message_type == MessageType.CHAT.value:
+            self.process_chat(message)
+        
+        elif message_type == MessageType.GAME_OVER.value:
+            self.process_gamer_over()
+
+        elif message_type == MessageType.GIVE_UP.value:
+            self.process_give_up(message)
+
+        elif message_type == MessageType.RIVAL_CONNECTED.value:
+            self.process_rival_connected(message)
 
         else:
-            print("Tipo de mensagem desconhecido:", message)
+            print("Unknown message type", message)
     
-    def start(self):
-        """Inicia a thread de recebimento de mensagens."""
-        receive_thread = threading.Thread(target=self.receive_messages)
-        receive_thread.daemon = True
-        receive_thread.start()
+    def get_server_address(self):
+        host = input('Enter the server IP to connect: ').strip()
+        port = input('Enter the server port to connect: ').strip()
+        self.host = host
+        self.port = int(port)
 
-class Grid:
-    def __init__(self, rows, columns, size, main):
-        self.GAME = main
-        self.y = rows
-        self.x = columns
-        self.size = size
-        self.whitetoken = loadImages('app/assets/WhiteToken.png', size)
-        self.blacktoken = loadImages('app/assets/BlackToken.png', size)
-        self.transitionWhiteToBlack = [loadImages(f'app/assets/BlackToWhite{i}.png', self.size) for i in range(1, 4)]
-        self.transitionBlackToWhite = [loadImages(f'app/assets/WhiteToBlack{i}.png', self.size) for i in range(1, 4)]
-        self.bg = self.loadBackGroundImages()
-
-        self.tokens = {}
-
-        self.gridBg = self.createbgimg()
-
-        self.gridLogic = self.regenGrid(self.y, self.x)
-
-    def loadBackGroundImages(self):
-        alpha = 'ABCDEFGHI'
-        spriteSheet = pygame.image.load('app/assets/image.png').convert_alpha()
-        imageDict = {}
-        for i in range(3):
-            for j in range(7):
-                imageDict[alpha[j]+str(i)] = loadSpriteSheet(spriteSheet, j, i, (self.size), (32, 32))
-        return imageDict
-
-    def createbgimg(self):
-        gridBg = [
-            ['C0', 'D0', 'D0', 'D0', 'D0', 'D0', 'D0', 'D0', 'D0', 'E0'],
-            ['C1', 'A0', 'A0', 'A0', 'A0', 'A0', 'A0', 'A0', 'A0', 'E1'],
-            ['C1', 'A0', 'A1', 'B1', 'A0', 'A0', 'A1', 'B1', 'A0', 'E1'],
-            ['C1', 'A0', 'A2', 'B2', 'A0', 'A0', 'A2', 'B2', 'A0', 'E1'],
-            ['C1', 'A0', 'A0', 'A0', 'A0', 'A0', 'A0', 'A0', 'A0', 'E1'],
-            ['C1', 'A0', 'A0', 'A0', 'A0', 'A0', 'A0', 'A0', 'A0', 'E1'],
-            ['C1', 'A0', 'A1', 'B1', 'A0', 'A0', 'A1', 'B1', 'A0', 'E1'],
-            ['C1', 'A0', 'A2', 'B2', 'A0', 'A0', 'A2', 'B2', 'A0', 'E1'],
-            ['C1', 'A0', 'A0', 'A0', 'A0', 'A0', 'A0', 'A0', 'A0', 'E1'],
-            ['C2', 'D2', 'D2', 'D2', 'D2', 'D2', 'D2', 'D2', 'D2', 'E2'],
-        ]
-        image = pygame.Surface((960, 960))
-        for j, row in enumerate(gridBg):
-            for i, img in enumerate(row):
-                image.blit(self.bg[img], (i * self.size[0], j * self.size[1]))
-        return image
-
-    def regenGrid(self, rows, columns):
-        """generate an empty grid for logic use"""
-        grid = []
-        for y in range(rows):
-            line = []
-            for x in range(columns):
-                line.append(0)
-            grid.append(line)
-        self.insertToken(grid, 1, 3, 3)
-        self.insertToken(grid, -1, 3, 4)
-        self.insertToken(grid, 1, 4, 4)
-        self.insertToken(grid, -1, 4, 3)
-
-        return grid
-
-    def drawGrid(self, window):
-        window.blit(self.gridBg, (0, 0))
-
-        for token in self.tokens.values():
-            token.draw(window)
-
-        availMoves = self.findAvailMoves(self.gridLogic, self.GAME.turn)
-        if self.GAME.turn == self.GAME.current_player :
-            for move in availMoves:
-                pygame.draw.rect(window, (240, 240, 240) if self.GAME.current_player == 1 else (50, 50, 50), (80 + (move[1] * 80) + 30, 80 + (move[0] * 80) + 30, 20, 20))
-
-    def printGameLogicBoard(self):
-        print('  | A | B | C | D | E | F | G | H |')
-        for i, row in enumerate(self.gridLogic):
-            line = f'{i} |'.ljust(3, " ")
-            for item in row:
-                line += f"{item}".center(3, " ") + '|'
-            print(line)
-        print()
-
-    def findValidCells(self, grid, curPlayer):
-        """Performs a check to find all empty cells that are adjacent to opposing player"""
-        validCellToClick = []
-        for gridX, row in enumerate(grid):
-            for gridY, col in enumerate(row):
-                if grid[gridX][gridY] != 0:
-                    continue
-                DIRECTIONS = directions(gridX, gridY) # Encontra todas as celulas vazias
-
-                for direction in DIRECTIONS:
-                    dirX, dirY = direction
-                    checkedCell = grid[dirX][dirY]
-
-                    if checkedCell == 0 or checkedCell == curPlayer:
-                        continue
-
-                    if (gridX, gridY) in validCellToClick:
-                        continue
-
-                    validCellToClick.append((gridX, gridY))
-        return validCellToClick
-
-    def swappableTiles(self, x, y, grid, player):
-        surroundCells = directions(x, y)
-        if len(surroundCells) == 0:
-            return []
-
-        swappableTiles = []
-        for checkCell in surroundCells:
-            checkX, checkY = checkCell
-            difX, difY = checkX - x, checkY - y
-            currentLine = []
-
-            RUN = True
-            while RUN:
-                if grid[checkX][checkY] == player * -1: # Se a primeira celula é igual ao jogador oposto
-                    currentLine.append((checkX, checkY))
-                elif grid[checkX][checkY] == player:
-                    RUN = False
-                    break
-                elif grid[checkX][checkY] == 0:
-                    currentLine.clear()
-                    RUN = False
-                checkX += difX
-                checkY += difY
-
-                if checkX < 0 or checkX > 7 or checkY < 0 or checkY > 7:
-                    currentLine.clear()
-                    RUN = False
-
-            if len(currentLine) > 0:
-                swappableTiles.extend(currentLine)
-
-        return swappableTiles
-
-    def findAvailMoves(self, grid, turn):
-        """Takes the list of validCells and checks each to see if playable"""
-        validCells = self.findValidCells(grid, turn)
-        playableCells = []
-
-        for cell in validCells:
-            x, y = cell
-            if cell in playableCells:
-                continue
-            swapTiles = self.swappableTiles(x, y, grid, turn)
-
-            #if len(swapTiles) > 0 and cell not in playableCells:
-            if len(swapTiles) > 0:
-                playableCells.append(cell)
-
-        return playableCells
-
-    def insertToken(self, grid, curplayer, y, x):
-        tokenImage = self.whitetoken if curplayer == 1 else self.blacktoken
-        self.tokens[(y, x)] = Token(curplayer, y, x, tokenImage, self.GAME)
-        grid[y][x] = self.tokens[(y, x)].player
-
-    def animateTransitions(self, cell, player):
-        if player == 1:
-            self.tokens[(cell[0], cell[1])].transition(self.transitionWhiteToBlack, self.whitetoken)
-        else:
-            self.tokens[(cell[0], cell[1])].transition(self.transitionBlackToWhite, self.blacktoken)
-
-class Token:
-    def __init__(self, player, gridX, gridY, image, main):
-        self.player = player
-        self.gridX = gridX
-        self.gridY = gridY
-        self.posX = 80 + (gridY * 80)
-        self.posY = 80 + (gridX * 80)
-        self.GAME = main
-
-        self.image = image
-
-    def transition(self, transitionImages, tokenImage):
-        for i in range(30):
-            self.image = transitionImages[i // 10]
-            self.GAME.draw()
-        self.image = tokenImage
-
-    def draw(self, window):
-        window.blit(self.image, (self.posX, self.posY))
-
-# Iniciar o cliente
 if __name__ == "__main__":
-    # client = Othello()
-    # client.start()
-    game = Othello()
-    game.start()  # Inicia a thread de recebimento de mensagens
-    game.run()    
+    client = Client()
+    client.run()
+    client.run_GUI()    

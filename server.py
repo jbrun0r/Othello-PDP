@@ -1,274 +1,193 @@
 import socket
 import threading
-from enum import Enum
 import json
 
-class MessageType(Enum):
-    UPDATE = "update"
-    MOVE = "move"
-    GAME_OVER = "game_over"
-    ERROR = "error"
-    SETUP = "setup"
+from app.utils.socket import get_local_LAN_ip
+from app.enums.message import MessageType, PlayerStatusType
+
+from app._class.Grid import LogicGrid
 
 
-#  utility functions
-def directions(x, y, minX=0, minY=0, maxX=7, maxY=7):
-    """Check to determine which directions are valid from current cell"""
-    validdirections = []
-    if x != minX: validdirections.append((x-1, y))
-    if x != minX and y != minY: validdirections.append((x-1, y-1))
-    if x != minX and y != maxY: validdirections.append((x-1, y+1))
-
-    if x!= maxX: validdirections.append((x+1, y))
-    if x != maxX and y != minY: validdirections.append((x+1, y-1))
-    if x != maxX and y != maxY: validdirections.append((x+1, y+1))
-
-    if y != minY: validdirections.append((x, y-1))
-    if y != maxY: validdirections.append((x, y+1))
-
-    return validdirections
-
-#  Classes
 class Server:
-    def __init__(self):
-        self.turn = 1
-
-        self.time = 0
-
-        self.rows = 8
-        self.columns = 8
-
-        self.grid = Grid(self.rows, self.columns, (80, 80), self)
-
-        self.RUN = True
-
-    def run(self):
-        while self.RUN == True:
-            self.update()
-
-    def update(self):
-        pass
-
-class Grid:
-    def __init__(self, rows, columns, size, main):
-        self.GAME = main
-        self.y = rows
-        self.x = columns
-        self.size = size
-        self.tokens = {}
-        self.gridLogic = self.regenGrid(self.y, self.x)
-
-    def regenGrid(self, rows, columns):
-        """generate an empty grid for logic use"""
-        grid = []
-        for y in range(rows):
-            line = []
-            for x in range(columns):
-                line.append(0)
-            grid.append(line)
-        self.insertToken(grid, 1, 3, 3)
-        self.insertToken(grid, -1, 3, 4)
-        self.insertToken(grid, 1, 4, 4)
-        self.insertToken(grid, -1, 4, 3)
-
-        return grid
-
-    def printGameLogicBoard(self):
-        print('  | A | B | C | D | E | F | G | H |')
-        for i, row in enumerate(self.gridLogic):
-            line = f'{i} |'.ljust(3, " ")
-            for item in row:
-                line += f"{item}".center(3, " ") + '|'
-            print(line)
-        print()
-
-    def findValidCells(self, grid, curPlayer):
-        """Performs a check to find all empty cells that are adjacent to opposing player"""
-        validCellToClick = []
-        for gridX, row in enumerate(grid):
-            for gridY, col in enumerate(row):
-                if grid[gridX][gridY] != 0:
-                    continue
-                DIRECTIONS = directions(gridX, gridY) # Encontra todas as celulas vazias
-
-                for direction in DIRECTIONS:
-                    dirX, dirY = direction
-                    checkedCell = grid[dirX][dirY]
-
-                    if checkedCell == 0 or checkedCell == curPlayer:
-                        continue
-
-                    if (gridX, gridY) in validCellToClick:
-                        continue
-
-                    validCellToClick.append((gridX, gridY))
-        return validCellToClick
-
-    def swappableTiles(self, x, y, grid, player):
-        surroundCells = directions(x, y)
-        if len(surroundCells) == 0:
-            return []
-
-        swappableTiles = []
-        for checkCell in surroundCells:
-            checkX, checkY = checkCell
-            difX, difY = checkX - x, checkY - y
-            currentLine = []
-
-            RUN = True
-            while RUN:
-                if grid[checkX][checkY] == player * -1: # Se a primeira celula é igual ao jogador oposto
-                    currentLine.append((checkX, checkY))
-                elif grid[checkX][checkY] == player:
-                    RUN = False
-                    break
-                elif grid[checkX][checkY] == 0:
-                    currentLine.clear()
-                    RUN = False
-                checkX += difX
-                checkY += difY
-
-                if checkX < 0 or checkX > 7 or checkY < 0 or checkY > 7:
-                    currentLine.clear()
-                    RUN = False
-
-            if len(currentLine) > 0:
-                swappableTiles.extend(currentLine)
-
-        return swappableTiles
-
-    def findAvailMoves(self, grid, turn):
-        """Takes the list of validCells and checks each to see if playable"""
-        validCells = self.findValidCells(grid, turn)
-        playableCells = []
-
-        for cell in validCells:
-            x, y = cell
-            if cell in playableCells:
-                continue
-            swapTiles = self.swappableTiles(x, y, grid, turn)
-
-            if len(swapTiles) > 0:
-                playableCells.append(cell)
-
-        return playableCells
-
-    def insertToken(self, grid, curplayer, y, x):
-        self.tokens[(y, x)] = Token(curplayer, y, x)
-        grid[y][x] = self.tokens[(y, x)].player
-
-class Token:
-    def __init__(self, player, gridX, gridY):
-        self.player = player
-        self.gridX = gridX
-        self.gridY = gridY
-        self.posX = 80 + (gridY * 80)
-        self.posY = 80 + (gridX * 80)
-
-class OthelloServer:
-    def __init__(self, host='localhost', port=5555):
+    def __init__(self, host='0.0.0.0', port=5555):
         self.host = host
         self.port = port
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server.bind((host, port))
-        self.server.listen(2)
 
-        self.players = []  # Lista de conexões de jogadores
-        self.game = Server()  # Instância do jogo Othello
+        self.conn_white = None
+        self.conn_black = None
+
+        self.grid = LogicGrid(8, 8)
+        self.turn = -1
+        self.game_over = False
+        self.white_score = 2
+        self.black_score = 2
     
-    def send_json(self, conn, dados):
-        conn.sendall(json.dumps(dados).encode())
+    def send_message_to(self, message, client):
+        if conn := self.conn_white if client == 1 else self.conn_black:
+            try:
+                conn.send(json.dumps(message).encode())
+            except (BrokenPipeError, ConnectionResetError):
+                print(f"Connection error with client {client}. Removing client.")
+                # handler
+            except Exception as e:
+                print(f"Failed to send update to client {client}: {e}")
 
-    def handle_message(self, conn, message):
-        # Processar a mensagem com base no tipo
-        print("Mensagem recebida:", message)
+    def send_setup(self, client):
+        rival_status = PlayerStatusType.CONNECTED.value
+        if not self.conn_white or not self.conn_black:
+            rival_status = PlayerStatusType.DISCONNECTED.value
+        message = {
+            "type": MessageType.SETUP.value,
+            "current_player": client, 
+            "grid": self.grid.logic_grid, 
+            "turn": -1,
+            "rival_status": rival_status
+        }
+        self.send_message_to(message, client)
+
+        if self.conn_white and self.conn_black:
+            self.send_rival_connected(client)
+
+    def send_game_over(self):
+        message = {
+            "type": MessageType.GAME_OVER.value,
+        }
+        self.send_message_to(message, 1)
+        self.send_message_to(message, -1)
+
+    def send_update(self):
+        message = {
+            "type": MessageType.UPDATE.value,
+            "grid": self.grid.logic_grid,
+            "turn": self.turn
+        }
+        self.send_message_to(message, self.turn)
+    
+    def send_rival_connected(self, client):
+        message = {
+            "type": MessageType.RIVAL_CONNECTED.value,
+            "grid": self.grid.logic_grid,
+        }
+        self.send_message_to(message, client*-1)
+
+    def process_move(self, message):
+        x = message.get('x')
+        y = message.get('y')
+        if valid_cells := self.grid.find_available_moves(self.grid.logic_grid, self.turn):
+            if (y, x) in valid_cells:
+                self.grid.insert_token(self.grid.logic_grid, self.turn, y, x)
+                swappable_tiles = self.grid.get_swappable_tiles(y, x, self.grid.logic_grid, self.turn)
+                for tile in swappable_tiles:
+                    self.grid.logic_grid[tile[0]][tile[1]] *= -1
+                self.turn *= -1
+                self.send_update()
+
+                if not self.grid.find_available_moves(self.grid.logic_grid, self.turn):
+                    self.game_over = True
+                    self.send_game_over()
+
+    def process_chat(self, message):
+        content = message.get('content')
+        client = message.get('player')
+        message = {
+        "type": MessageType.CHAT.value,
+        "content": content, 
+        }
+        self.send_message_to(message, client)
+
+    def process_give_up(self, conn, client, message):
+        rival_status = message.get('rival_status')
+        message = {
+            "type": MessageType.GIVE_UP.value,
+            "rival_status": rival_status
+        }
+        self.send_message_to(message, client*-1)
+        if rival_status == PlayerStatusType.DISCONNECTED.value:
+            self.grid.reset_logic_grid()
+            self.turn = -1
+            self.game_over = False
+            conn.close()
+
+    def process_restart(self):
+        self.grid.reset_logic_grid()
+        self.turn = -1
+        self.game_over = False
+        self.send_setup(1)
+        self.send_setup(-1)
+    
+    def handle_message(self, conn, message, client):
         message_type = message.get('type')
         
-        if message_type == "move":
-            print(message_type)
-            x = message.get('x')
-            y = message.get('y')
-            validCells = self.game.grid.findAvailMoves(self.game.grid.gridLogic, self.game.turn)
-            if not validCells:
-                pass
-            else:
-                if (y, x) in validCells:
-                    print(f'{x}{y}')
-                    self.game.grid.printGameLogicBoard()
-                    print('passou')
-                    self.game.grid.insertToken(self.game.grid.gridLogic, self.game.turn, y, x)
-                    swappableTiles = self.game.grid.swappableTiles(y, x, self.game.grid.gridLogic, self.game.turn)
-                    for tile in swappableTiles:
-                        self.game.grid.gridLogic[tile[0]][tile[1]] *= -1
-                    self.game.turn *= -1
-            self.send_update(conn, self.game.grid.gridLogic)
+        if message_type == MessageType.MOVE.value:
+            self.process_move(message)
             
-            self.game.grid.printGameLogicBoard()
+        elif message_type == MessageType.CHAT.value:
+            self.process_chat(message)
+
+        elif message_type == MessageType.GIVE_UP.value:
+            self.process_give_up(conn, client, message)
+
+        elif message_type == MessageType.RESTART.value:
+            self.process_restart()
 
         else:
-            print("Tipo de mensagem desconhecido:", message)
-
-    ## Enviar gridLogic como JSON com seu type
-    def send_setup(self, conn, player):
-        message = {
-            "type": "setup",
-            "current_player": player
-        }
-        json_message = json.dumps(message)
-        conn.send(json_message.encode())  # Enviar o JSON codificado como bytes
-
-    def send_update(self, conn, grid_logic):
-        print("enviando update")
-        message = {
-            "type": "update",  # Define o tipo de mensagem
-            "grid": grid_logic,  # Envia o grid atual
-            "turn": self.game.turn
-        }
-        self.send_update_to_all_clients(message)
-        # json_message = json.dumps(message)
+            print("Unknown message type", message)
+            
+    def handle_client(self, conn, client):
+        self.send_setup(client)
         
-        # conn.sendall(json_message.encode())  # Enviar o JSON codificado como bytes
-        print("update enviado")
-    
-    def send_update_to_all_clients(self, data):
-        for client in self.players:
-            try:
-                json_message = json.dumps(data)
-                client.send(json_message.encode())
-            except Exception as e:
-                print(f"Failed to send update to client: {e}")
-                self.clients.remove(client)  # Remover cliente em caso de falha
-
-    def handle_client(self, conn, player):
-        print(f"Jogador {player} conectado.")
-
-        self.send_setup(conn, player)
-        
-        self.game.grid.printGameLogicBoard()
         try:
             while True:
-                # Recebe e processa mensagens aqui
                 data = conn.recv(1024).decode()
                 if data:
+                    print(f'{client}: {data}')
                     try:
-                        message = json.loads(data)  # Converter de JSON para dicionário
-                        self.handle_message(conn, message)
+                        message = json.loads(data)
+                        self.handle_message(conn, message, client)
                     except json.JSONDecodeError:
-                        print("Erro ao decodificar a mensagem JSON.")
-        except ConnectionResetError:
-            print(f"Jogador {player} desconectado.")
+                        print("Error decoding the JSON message.")
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            print(f"Client {client} disconnected.")
+            self.remove_client(client)
         finally:
             conn.close()
 
-    def start(self):
-        client_id = 1  # Primeiro cliente será 1, o segundo será -1
-        while client_id >= -1:
-            conn, addr = self.server.accept()
-            self.players.append(conn)
-            threading.Thread(target=self.handle_client, args=(conn, client_id)).start()
-            client_id -= 2
+    def remove_client(self, client):
+        """Remove the specified client and set up the server to accept a new client in that position."""
+        if client == 1:
+            self.conn_white = None
+        else:
+            self.conn_black = None
+        print(f"Client {client} removed. Waiting for new connection.")
+
+        # Start a new thread to accept a new client to fill the spot
+        threading.Thread(target=self.accept_new_client, args=(client,)).start()
+
+    def accept_new_client(self, client_color):
+        """Accepts a new client and assigns it to the specified color position."""
+        conn, addr = self.server.accept()
+        print(f"New client connected: {addr} as {'white' if client_color == 1 else 'black'}")
+        if client_color == 1:
+            self.conn_white = conn
+        else:
+            self.conn_black = conn
+
+        threading.Thread(target=self.handle_client, args=(conn, client_color)).start()
+
+    def run(self):
+        port = input("Enter the server port:").strip()
+        self.port = int(port)
+        self.server.bind((self.host, self.port))
+        self.server.listen(2)
+        
+        print(f"Othello-Server Running: ('{get_local_LAN_ip()}', {self.port})")
+        
+        # Initial client connections for white and black
+        self.accept_new_client(1)
+        self.accept_new_client(-1)
 
 # Iniciar o servidor
 if __name__ == "__main__":
-    server = OthelloServer()
-    server.start()
+    server = Server()
+    server.run()
