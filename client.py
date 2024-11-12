@@ -352,8 +352,8 @@ class Client:
             print("Unknown message type", message)
     
     def get_server_address(self):
-        host = input('host: ')
-        port = input('port: ')
+        host = input('Enter the server IP to connect: ').strip()
+        port = input('Enter the server port to connect: ').strip()
         self.host = host
         self.port = int(port)
 

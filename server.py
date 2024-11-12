@@ -13,8 +13,6 @@ class Server:
         self.host = host
         self.port = port
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server.bind((host, port))
-        self.server.listen(2)
 
         self.conn_white = None
         self.conn_black = None
@@ -178,6 +176,11 @@ class Server:
         threading.Thread(target=self.handle_client, args=(conn, client_color)).start()
 
     def run(self):
+        port = input("Enter the server port:").strip()
+        self.port = int(port)
+        self.server.bind((self.host, self.port))
+        self.server.listen(2)
+        
         print(f"Othello-Server Running: ('{get_local_LAN_ip()}', {self.port})")
         
         # Initial client connections for white and black
