@@ -7,12 +7,16 @@ from app.enums.message import MessageType, PlayerStatusType
 
 from app._class.Grid import LogicGrid
 
+from xmlrpc.server import SimpleXMLRPCServer
+from xmlrpc.server import SimpleXMLRPCRequestHandler
+from xmlrpc.client import ServerProxy
+import threading
 
-class Server:
-    def __init__(self, host='0.0.0.0', port=5555):
+class RPCServer:
+    def __init__(self, host='0.0.0.0', port=8000):
+        self.lock = threading.Lock()
         self.host = host
         self.port = port
-        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
         self.conn_white = None
         self.conn_black = None
@@ -22,21 +26,73 @@ class Server:
         self.game_over = False
         self.white_score = 2
         self.black_score = 2
+
+    def register(self):
+        """
+        Registra o cliente como 1 ou -1.
+        """
+        with self.lock:
+            if self.conn_white is None:
+                self.conn_white = None
+                return self.get_setup(1)
+            elif self.conn_black is None:
+                self.conn_black = None
+                return self.get_setup(-1)
+            else:
+                return 0  # Não há espaço para mais clientes
+
+    def send_message(self, sender, message):
+        """
+        Recebe a mensagem de um cliente e a encaminha ao outro.
+        """
+        if sender == 1:
+            recipient_conn = self.conn_black  # O destinatário é o cliente -1
+            client = 1
+        else:
+            recipient_conn = self.conn_white  # O destinatário é o cliente 1
+            client = -1
+
+        if recipient_conn is not None:
+            try:
+                data = json.loads(message)
+                self.handle_message(data, sender)  # Processa a mensagem
+            except (BrokenPipeError, ConnectionResetError):
+                print(f"Connection error with recipient client {client}.")
+            except json.JSONDecodeError:
+                print("Error decoding the JSON message.")
+        return f"Client {client} not connected."
+
+
+    def receive_callback(self, client_id, callback_address):
+        """
+        Registra o endereço do callback de um cliente.
+        """
+        with self.lock:
+            if client_id == 1:
+                self.conn_white = ServerProxy(callback_address)
+                return "Callback registered for white."
+            elif client_id == -1:
+                self.conn_black = ServerProxy(callback_address)
+                return "Callback registered for black."
+            return "Invalid client ID."
     
     def send_message_to(self, message, client):
         if conn := self.conn_white if client == 1 else self.conn_black:
             try:
-                conn.send(json.dumps(message).encode())
+                conn.receive_message(json.dumps(message))
             except (BrokenPipeError, ConnectionResetError):
                 print(f"Connection error with client {client}. Removing client.")
-                # handler
-            except Exception as e:
-                print(f"Failed to send update to client {client}: {e}")
+                if client == 1:
+                    self.conn_white = None
+                else:
+                    self.conn_black = None
 
-    def send_setup(self, client):
-        rival_status = PlayerStatusType.CONNECTED.value
-        if not self.conn_white or not self.conn_black:
-            rival_status = PlayerStatusType.DISCONNECTED.value
+    def get_setup(self, client):
+
+        rival_status = PlayerStatusType.CONNECTED.value if (
+            self.conn_white if client == -1 else self.conn_black
+        ) else PlayerStatusType.DISCONNECTED.value
+
         message = {
             "type": MessageType.SETUP.value,
             "current_player": client, 
@@ -44,17 +100,17 @@ class Server:
             "turn": -1,
             "rival_status": rival_status
         }
-        self.send_message_to(message, client)
 
-        if self.conn_white and self.conn_black:
-            self.send_rival_connected(client)
+        if client == 1 and self.conn_black != None:
+            self.send_rival_connected(-1)
+        elif client == -1 and self.conn_white != None:
+            self.send_rival_connected(1)
 
-    def send_game_over(self):
-        message = {
-            "type": MessageType.GAME_OVER.value,
-        }
-        self.send_message_to(message, 1)
-        self.send_message_to(message, -1)
+        return json.dumps(message)
+    
+    def send_setup(self, client):
+        setup = self.get_setup(client)
+        self.send_message_to(json.loads(setup), client)
 
     def send_update(self):
         message = {
@@ -69,7 +125,14 @@ class Server:
             "type": MessageType.RIVAL_CONNECTED.value,
             "grid": self.grid.logic_grid,
         }
-        self.send_message_to(message, client*-1)
+        self.send_message_to(message, client)
+
+    def send_game_over(self):
+        message = {
+            "type": MessageType.GAME_OVER.value,
+        }
+        self.send_message_to(message, 1)
+        self.send_message_to(message, -1)
 
     def process_move(self, message):
         x = message.get('x')
@@ -86,7 +149,7 @@ class Server:
                 if not self.grid.find_available_moves(self.grid.logic_grid, self.turn):
                     self.game_over = True
                     self.send_game_over()
-
+    
     def process_chat(self, message):
         content = message.get('content')
         client = message.get('player')
@@ -96,19 +159,6 @@ class Server:
         }
         self.send_message_to(message, client)
 
-    def process_give_up(self, conn, client, message):
-        rival_status = message.get('rival_status')
-        message = {
-            "type": MessageType.GIVE_UP.value,
-            "rival_status": rival_status
-        }
-        self.send_message_to(message, client*-1)
-        if rival_status == PlayerStatusType.DISCONNECTED.value:
-            self.grid.reset_logic_grid()
-            self.turn = -1
-            self.game_over = False
-            conn.close()
-
     def process_restart(self):
         self.grid.reset_logic_grid()
         self.turn = -1
@@ -116,78 +166,49 @@ class Server:
         self.send_setup(1)
         self.send_setup(-1)
     
-    def handle_message(self, conn, message, client):
+    def process_give_up(self, client, message):
+        rival_status = message.get('rival_status')
+        message = {
+            "type": MessageType.GIVE_UP.value,
+            "rival_status": rival_status
+        }
+        self.send_message_to(message, client)
+        if rival_status == PlayerStatusType.DISCONNECTED.value:
+            self.grid.reset_logic_grid()
+            self.turn = -1
+            self.game_over = False
+            if client*-1 == 1:
+                self.conn_white = None
+            else: self.conn_black = None
+
+    def handle_message(self, message, client):
+        print(message)
         message_type = message.get('type')
         
         if message_type == MessageType.MOVE.value:
             self.process_move(message)
-            
+
         elif message_type == MessageType.CHAT.value:
             self.process_chat(message)
-
-        elif message_type == MessageType.GIVE_UP.value:
-            self.process_give_up(conn, client, message)
-
+        
         elif message_type == MessageType.RESTART.value:
             self.process_restart()
+        
+        elif message_type == MessageType.GIVE_UP.value:
+            self.process_give_up(client, message)
 
         else:
             print("Unknown message type", message)
-            
-    def handle_client(self, conn, client):
-        self.send_setup(client)
-        
-        try:
-            while True:
-                data = conn.recv(1024).decode()
-                if data:
-                    print(f'{client}: {data}')
-                    try:
-                        message = json.loads(data)
-                        self.handle_message(conn, message, client)
-                    except json.JSONDecodeError:
-                        print("Error decoding the JSON message.")
-        except (ConnectionResetError, BrokenPipeError, OSError):
-            print(f"Client {client} disconnected.")
-            self.remove_client(client)
-        finally:
-            conn.close()
-
-    def remove_client(self, client):
-        """Remove the specified client and set up the server to accept a new client in that position."""
-        if client == 1:
-            self.conn_white = None
-        else:
-            self.conn_black = None
-        print(f"Client {client} removed. Waiting for new connection.")
-
-        # Start a new thread to accept a new client to fill the spot
-        threading.Thread(target=self.accept_new_client, args=(client,)).start()
-
-    def accept_new_client(self, client_color):
-        """Accepts a new client and assigns it to the specified color position."""
-        conn, addr = self.server.accept()
-        print(f"New client connected: {addr} as {'white' if client_color == 1 else 'black'}")
-        if client_color == 1:
-            self.conn_white = conn
-        else:
-            self.conn_black = conn
-
-        threading.Thread(target=self.handle_client, args=(conn, client_color)).start()
 
     def run(self):
         port = input("Enter the server port:").strip()
         self.port = int(port)
-        self.server.bind((self.host, self.port))
-        self.server.listen(2)
-        
-        print(f"Othello-Server Running: ('{get_local_LAN_ip()}', {self.port})")
-        
-        # Initial client connections for white and black
-        self.accept_new_client(1)
-        self.accept_new_client(-1)
 
-# Iniciar o servidor
+        with SimpleXMLRPCServer((self.host, self.port), allow_none=True) as server:
+            server.register_instance(self)
+            print(f"Othello-RPC-Server Running: {get_local_LAN_ip()}:{self.port}")
+            server.serve_forever()
+
 if __name__ == "__main__":
-    server = Server()
+    server = RPCServer()
     server.run()
