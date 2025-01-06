@@ -1,8 +1,8 @@
 # Othello Game
 
-![client2](https://github.com/jbrun0r/assets/blob/main/Othello/Screenshot%202024-11-04%20at%2016.54.31.png?raw=true)
+![client2](https://github.com/jbrun0r/assets/blob/main/Othello/Screenshot%202025-01-06%20at%2020.18.30.png?raw=true)
 
-A multiplayer Othello (Reversi) game implemented in Python, using sockets for real-time communication between server and clients. The game features a GUI built with `pygame`, supporting two players connected over a local network.
+A multiplayer Othello (Reversi) game implemented in Python, using RPC for real-time communication between server and clients. The game features a GUI built with `pygame`, supporting two players connected over a local network.
 
 ## Clone the Repository
 
