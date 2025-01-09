@@ -27,16 +27,16 @@ class RPCServer:
         self.white_score = 2
         self.black_score = 2
 
-    def register(self):
+    def register(self, callback_address):
         """
         Registra o cliente como 1 ou -1.
         """
-        with self.lock:
+        with self.lock: # thread-safe
             if self.conn_white is None:
-                self.conn_white = None
+                self.conn_white = ServerProxy(callback_address)
                 return self.get_setup(1)
             elif self.conn_black is None:
-                self.conn_black = None
+                self.conn_black = ServerProxy(callback_address)
                 return self.get_setup(-1)
             else:
                 return 0  # Não há espaço para mais clientes
@@ -61,34 +61,16 @@ class RPCServer:
             except json.JSONDecodeError:
                 print("Error decoding the JSON message.")
         return f"Client {client} not connected."
-
-
-    def receive_callback(self, client_id, callback_address):
-        """
-        Registra o endereço do callback de um cliente.
-        """
-        with self.lock:
-            if client_id == 1:
-                self.conn_white = ServerProxy(callback_address)
-                return "Callback registered for white."
-            elif client_id == -1:
-                self.conn_black = ServerProxy(callback_address)
-                return "Callback registered for black."
-            return "Invalid client ID."
     
     def send_message_to(self, message, client):
         if conn := self.conn_white if client == 1 else self.conn_black:
             try:
                 conn.receive_message(json.dumps(message))
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionRefusedError):
                 print(f"Connection error with client {client}. Removing client.")
-                if client == 1:
-                    self.conn_white = None
-                else:
-                    self.conn_black = None
+                self.handle_disconnection(client)
 
     def get_setup(self, client):
-
         rival_status = PlayerStatusType.CONNECTED.value if (
             self.conn_white if client == -1 else self.conn_black
         ) else PlayerStatusType.DISCONNECTED.value
@@ -172,17 +154,21 @@ class RPCServer:
             "type": MessageType.GIVE_UP.value,
             "rival_status": rival_status
         }
-        self.send_message_to(message, client)
         if rival_status == PlayerStatusType.DISCONNECTED.value:
-            self.grid.reset_logic_grid()
-            self.turn = -1
-            self.game_over = False
-            if client*-1 == 1:
-                self.conn_white = None
-            else: self.conn_black = None
+            return self.handle_disconnection(client)
+        self.send_message_to(message, client*-1)
+
+    def handle_disconnection(self, client):
+        self.grid.reset_logic_grid()
+        self.turn = -1
+        self.game_over = False
+        if client == 1:
+            self.conn_white = None
+        else: self.conn_black = None
+
+        self.send_message_to({"type": MessageType.GIVE_UP.value, "rival_status": PlayerStatusType.DISCONNECTED.value}, client*-1)
 
     def handle_message(self, message, client):
-        print(message)
         message_type = message.get('type')
         
         if message_type == MessageType.MOVE.value:
@@ -205,8 +191,12 @@ class RPCServer:
         self.port = int(port)
 
         with SimpleXMLRPCServer((self.host, self.port), allow_none=True) as server:
-            server.register_instance(self)
+            # server.register_instance(self)
+            server.register_function(self.register, 'register')
+            server.register_function(self.send_message, 'send_message')
+
             print(f"Othello-RPC-Server Running: {get_local_LAN_ip()}:{self.port}")
+            
             server.serve_forever()
 
 if __name__ == "__main__":
