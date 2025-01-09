@@ -44,7 +44,6 @@ class Client:
         Inicia um servidor de callback XML-RPC para receber mensagens.
         """
         def receive_message(message):
-            print(message)
             msg = json.loads(message)
             print(f"\nMessage received: {msg}")
             self.handle_message(msg)
@@ -61,16 +60,14 @@ class Client:
         return f"http://{self.host}:{assigned_port}"
 
     def register(self):
-        setup_data = self.remote_server.register()
-        print(json.loads(setup_data))
+        self.callback_address = self.start_callback_server()
+        print(f"Listening on: {self.callback_address}")
+
+        setup_data = self.remote_server.register(self.callback_address)
         self.process_setup(json.loads(setup_data))
 
-        print(f"Connected as Client {self.current_player}")
-
-
-        self.callback_address = self.start_callback_server()
-        print(f"Listening for messages on {self.callback_address}...")
-        self.remote_server.receive_callback(self.current_player, self.callback_address)
+        print(f"Connected as Client: {self.current_player}")
+        print(json.loads(setup_data))
 
     def run(self):
         host = input('Enter the server IP to connect: ').strip()
@@ -110,7 +107,7 @@ class Client:
             "x": x,
             "y": y
         }
-        self.remote_server.send_message(self.current_player*-1, json.dumps(message))
+        self.remote_server.send_message(self.current_player, json.dumps(message))
     
     def send_message_chat(self, content):
         message = {
@@ -118,21 +115,21 @@ class Client:
             "content": content,
             "player": self.current_player * -1
         }
-        self.remote_server.send_message(self.current_player*-1, json.dumps(message))
+        self.remote_server.send_message(self.current_player, json.dumps(message))
 
     def send_give_up(self, rival_status):
         message = {
             "type": MessageType.GIVE_UP.value,
             "rival_status": rival_status
         }
-        self.remote_server.send_message(self.current_player*-1, json.dumps(message))
+        self.remote_server.send_message(self.current_player, json.dumps(message))
         self.game_over = True
 
     def send_restart(self):
         message = {
             "type": MessageType.RESTART.value,
         }
-        self.remote_server.send_message(self.current_player*-1, json.dumps(message))
+        self.remote_server.send_message(self.current_player, json.dumps(message))
 
     def process_setup(self, message):
         current_player = message.get('current_player')
